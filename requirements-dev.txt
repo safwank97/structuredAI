@@ -1,0 +1,4 @@
+-r requirements.txt
+# httpx (used by scripts/smoke_test.py) now lives in requirements.txt itself
+# -- this file is kept only so `pip install -r requirements-dev.txt` still
+# works if you're following older notes; nothing extra to add here today.

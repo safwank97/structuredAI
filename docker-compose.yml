@@ -1,0 +1,228 @@
+# Entirely throwaway local stack for smoke-testing the Control Plane API
+# before anything touches real Azure resources. No named volumes anywhere,
+# so `docker compose down` leaves nothing behind -- run it, test it, bin it.
+#
+# Six services, in dependency order:
+#   db               -- plain postgres:16, standing in for acb-msak-postgre-sql
+#   migrate           -- runs once (`alembic upgrade head`), then exits 0
+#   api               -- the Control Plane API, only starts once migrate succeeds
+#   result-consumer   -- control-plane-side process meant to consume run
+#                        results and write agent_runs/run_usage/messages;
+#                        currently a documented no-op pending Redis wiring
+#                        (see app/worker/result_consumer.py) -- shares the
+#                        api image, different command
+#   sandbox-worker    -- the sandbox job stand-in (see sandbox_worker/); its
+#                        own minimal image, isolated onto sandbox-net (see
+#                        below)
+#   smoketest         -- runs scripts/smoke_test.py against api, then exits
+#
+# REQUIRES two real Azure Service Bus SAS connection strings in your
+# environment (or a local .env file) -- confirmed against the real,
+# already-provisioned namespace, these are two SEPARATE, differently-scoped
+# identities against the SAME one queue (acb-msak-sbq-agent-runs), not a
+# shared credential:
+#   SERVICE_BUS_SEND_CONNECTION_STRING   (api)             -- send-only
+#   SERVICE_BUS_CONNECTION_STRING        (sandbox-worker)  -- listen-only
+# See .env.example for exactly which Key Vault secret each comes from.
+# Unlike Blob Storage and email, there is no local stand-in for either --
+# the real namespace, queue, and both SAS policies already exist.
+#
+# The queue is also session-enabled (confirmed via `az servicebus queue
+# show`), which app/core/queue.py and sandbox_worker/queue_client.py handle
+# for real (session_id=run_id on send, NEXT_AVAILABLE_SESSION on receive) --
+# this is a hard Service Bus requirement for this entity, not optional.
+#
+# sandbox-net containment note (O2): sandbox-worker is deliberately NOT on
+# the same Docker network as `db` -- it cannot reach Postgres at all, at the
+# network level, regardless of any credential it might somehow obtain. It
+# IS on the default network (needed to reach `api`'s broker endpoints, and
+# to reach the real Azure Service Bus over the internet, since the worker
+# polls that queue directly). That second part is a real, acknowledged gap:
+# plain Docker Compose networking can express "cut off from this one other
+# container" but not "allowed to reach only Service Bus's (and, once wired,
+# APIM's) endpoints and nothing else on the internet" -- a true deny-by-
+# default egress allowlist needs real network policy tooling (Azure NSG/
+# firewall rules with a service-tag + private-endpoint allowlist, in the
+# real deployment). Flagged here rather than claimed as solved by the
+# network topology below.
+#
+# Results/streaming come back via Redis (acb-msak-redis, already real),
+# not a second Service Bus queue -- see app/worker/result_consumer.py and
+# sandbox_worker/result_publisher.py. Like Service Bus, there is no local
+# Redis stand-in container here: both result-consumer and sandbox-worker
+# talk to the REAL acb-msak-redis cache directly, over the internet, the
+# same way they already do for Service Bus. REDIS_PASSWORD (the real
+# acb-msak-redis-pkey secret) is required on both. UNVERIFIED: whether
+# acb-msak-redis's network ACLs (firewall / private endpoint) allow reaching
+# it from outside its VNet the way Service Bus apparently does -- if these
+# two containers can't connect, that's the first thing to check (compare
+# against Key Vault's defaultAction: Deny + IP-allow-rule pattern), not
+# necessarily a code bug.
+#
+# Usage:
+#   docker compose up --build -d
+#   docker compose wait smoketest
+#   echo $?
+# (run detached, then explicitly wait on the one-shot smoketest container
+# and read ITS exit code. Do NOT use `--exit-code-from smoketest` here --
+# that flag silently implies --abort-on-container-exit, which stops the
+# WHOLE stack the instant ANY container exits, including `migrate` exiting
+# 0 on purpose after a successful run -- it never gets as far as starting
+# api/smoketest at all. Learned that the hard way against a real run.
+#
+# No `docker compose wait` on your Compose version? Fall back to plain
+# `docker compose up --build` (no extra flags), watch the interleaved logs
+# for "ALL SMOKE TESTS PASSED", then Ctrl+C.
+
+# db + migrate + api + result-consumer + smoketest all stay on Compose's
+# implicit default network, same as before this file grew a sandbox job --
+# only `sandbox-net` below is new. sandbox-worker's only other network: api
+# also joins it (so the worker can reach its broker endpoints), but db,
+# migrate, result-consumer and smoketest never do -- sandbox-worker has no
+# network route to any of them.
+networks:
+  sandbox-net:
+    driver: bridge
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: acbmsakadmin
+      POSTGRES_PASSWORD: localthrowawaypw
+      POSTGRES_DB: cplane_dev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acbmsakadmin -d cplane_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: .
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://acbmsakadmin:localthrowawaypw@db:5432/cplane_dev
+      ACB_APP_ROLE_PASSWORD: throwawayapppw123
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    environment:
+      LOCAL_DEV_SECRETS: "true"
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: cplane_dev
+      POSTGRES_APP_USER: acb_app
+      POSTGRES_APP_PASSWORD: throwawayapppw123
+      JWT_SECRET_KEY: throwaway-jwt-secret-for-smoke-test-only
+      # Real Azure Service Bus, send-only side -- see this file's top
+      # comment. Must come from your shell environment or a local .env
+      # (never commit a real value); ${VAR:?msg} makes `docker compose up`
+      # fail fast with a clear message instead of silently starting api
+      # with an empty connection string that would only surface as a
+      # confusing error the first time a run is created.
+      SERVICE_BUS_SEND_CONNECTION_STRING: ${SERVICE_BUS_SEND_CONNECTION_STRING:?Set SERVICE_BUS_SEND_CONNECTION_STRING in your shell or .env -- see .env.example}
+    ports:
+      - "8000:8000"
+    networks:
+      - default
+      - sandbox-net
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  result-consumer:
+    build: .
+    command: ["python", "-m", "app.worker.result_consumer"]
+    environment:
+      LOCAL_DEV_SECRETS: "true"
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: cplane_dev
+      POSTGRES_APP_USER: acb_app
+      POSTGRES_APP_PASSWORD: throwawayapppw123
+      JWT_SECRET_KEY: throwaway-jwt-secret-for-smoke-test-only
+      # Real Azure Cache for Redis -- see this file's top comment. Settings'
+      # redis_host/redis_ssl_port already default to the real
+      # acb-msak-redis.redis.cache.windows.net:6380, so only the password
+      # needs to come from the environment here.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in your shell or .env -- see .env.example}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # NOT wrapped in a retry loop in result_consumer.py itself -- a real
+    # Redis connection failure at startup (xgroup_create, in run_forever())
+    # is left to raise and crash the process outright, deliberately loud.
+    # Without a restart policy that container then just silently vanishes
+    # from `docker ps`, which is exactly what happened testing v1.18
+    # against a Redis firewall that hadn't allow-listed this machine's IP
+    # yet -- restart: on-failure makes Compose keep retrying (and keep the
+    # container visibly present, in a "Restarting" state, logging the same
+    # error each attempt) instead of dying once and going quiet.
+    restart: on-failure
+    # Same image as api, same Postgres/JWT config -- this is control-plane
+    # machinery (see app/worker/result_consumer.py's module docstring for
+    # why it's a separate container rather than a background task inside
+    # the api process), so it belongs on the default network only. It never
+    # needs, and is never given, access to sandbox-net. No Service Bus env
+    # var here on purpose -- this process doesn't talk to Service Bus at
+    # all (see this file's top comment); it consumes results from Redis
+    # instead (REDIS_PASSWORD above).
+
+  sandbox-worker:
+    build:
+      context: .
+      dockerfile: sandbox_worker/Dockerfile
+    environment:
+      CONTROL_PLANE_URL: http://api:8000
+      # Listen-only side -- a DIFFERENT real SAS than api's
+      # SERVICE_BUS_SEND_CONNECTION_STRING above (see .env.example for the
+      # exact Key Vault secret each comes from). Sourced from a plain env
+      # var, never Key Vault, on purpose -- see queue_client.py's docstring
+      # (O1: the sandbox has no path to secrets of its own).
+      SERVICE_BUS_CONNECTION_STRING: ${SERVICE_BUS_LISTEN_CONNECTION_STRING:?Set SERVICE_BUS_LISTEN_CONNECTION_STRING in your shell or .env -- see .env.example}
+      # Real Azure Cache for Redis, same credential as result-consumer's
+      # (see result_publisher.py's docstring: there's no separate
+      # write-scoped Redis credential provisioned yet, unlike Service Bus's
+      # send/listen split -- a real gap, tracked in DEFERRED_ITEMS.md, not
+      # silently accepted as fine). REDIS_HOST/REDIS_SSL_PORT are left
+      # unset here on purpose -- result_publisher.py's own defaults already
+      # match the real cache, so only the secret needs to be supplied.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in your shell or .env -- see .env.example}
+    networks:
+      - sandbox-net
+    depends_on:
+      api:
+        condition: service_healthy
+    # A Redis publish failure inside _deliver_result() is caught and
+    # logged, not raised (see worker.py's docstring), so this restart
+    # policy is really for the OTHER thing that can crash this process
+    # outright and uncaught: queue_client.py's receive_one() constructing
+    # a ServiceBusClient from a bad/unreachable connection string, which
+    # happens outside main()'s per-message try/except. Same reasoning as
+    # result-consumer's restart policy above -- fail visibly and keep
+    # retrying rather than silently vanish from `docker ps`.
+    restart: on-failure
+    # Deliberately NOT on the default network -- see this file's top
+    # comment (O2). Cannot resolve or reach `db`, `migrate`,
+    # `result-consumer`, or `smoketest` at all; its only in-cluster peer is
+    # `api`, reached over sandbox-net, and it additionally needs normal
+    # internet egress to reach the real Azure Service Bus directly (the
+    # acknowledged, documented gap in this local topology's containment
+    # story).
+
+  smoketest:
+    build: .
+    entrypoint: ["python", "scripts/smoke_test.py"]
+    environment:
+      SMOKE_TEST_BASE_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy

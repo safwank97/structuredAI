@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Containment Control Plane</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="card">
+    <h1>
+      <svg class="h1-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 21h18" />
+        <path d="M5 21V8l7-4 7 4v13" />
+        <path d="M9 21v-6h6v6" />
+        <path d="M9 12h.01M12 12h.01M15 12h.01M9 9h.01M12 9h.01M15 9h.01" />
+      </svg>
+      <span>
+        Construction Plan Review
+        <small>Agent Containment Control Plane</small>
+      </span>
+    </h1>
+
+    <!-- ===== Auth view: shown when signed out ===== -->
+    <section id="auth-view">
+      <div class="tabs">
+        <button type="button" class="tab-btn active" data-tab="login">Sign in</button>
+        <button type="button" class="tab-btn" data-tab="register">Register</button>
+      </div>
+
+      <form id="login-form" class="tab-panel active">
+        <label for="login-email">Email</label>
+        <div class="input-wrap">
+          <input id="login-email" type="email" required autocomplete="username" />
+          <span class="field-badge" id="login-email-badge" hidden></span>
+        </div>
+        <p class="field-message" id="login-email-message" aria-live="polite"></p>
+
+        <label for="login-password">Password</label>
+        <input id="login-password" type="password" required autocomplete="current-password" />
+
+        <button type="submit">Sign in</button>
+        <p class="error" id="login-error"></p>
+      </form>
+
+      <form id="register-form" class="tab-panel">
+        <label for="register-display-name">Display name</label>
+        <input id="register-display-name" type="text" required maxlength="120" />
+
+        <label for="register-email">Email</label>
+        <div class="input-wrap">
+          <input id="register-email" type="email" required autocomplete="username" />
+          <span class="field-badge" id="register-email-badge" hidden></span>
+        </div>
+        <p class="field-message" id="register-email-message" aria-live="polite">
+          e.g. name@example.com
+        </p>
+
+        <label for="register-password">Password</label>
+        <div class="input-wrap">
+          <input id="register-password" type="password" required minlength="10" autocomplete="new-password" />
+          <span class="field-badge" id="register-password-badge" hidden></span>
+        </div>
+        <p class="field-message" id="register-password-message" aria-live="polite">
+          At least 10 characters, mixing two of: lowercase, uppercase, digits, symbols.
+        </p>
+
+        <label for="register-password-confirm">Re-enter password</label>
+        <div class="input-wrap">
+          <input id="register-password-confirm" type="password" required autocomplete="new-password" />
+          <span class="field-badge" id="register-password-confirm-badge" hidden></span>
+        </div>
+        <p class="field-message" id="register-password-confirm-message" aria-live="polite"></p>
+
+        <button type="submit">Create account</button>
+        <p class="error" id="register-error"></p>
+      </form>
+
+      <div class="tab-panel" id="register-success">
+        <p class="success-heading">Almost there -- check your email</p>
+        <p class="muted" id="register-success-text"></p>
+        <div class="dev-verify-box" id="dev-verify-box" hidden>
+          <p class="dev-verify-label">Local dev build -- no real email is sent</p>
+          <a href="#" id="dev-verify-link" class="dev-verify-link">Verify now &amp; sign me in</a>
+        </div>
+        <button type="button" id="register-success-back">Back to sign in</button>
+      </div>
+    </section>
+
+    <!-- ===== Authenticated view: shown when signed in ===== -->
+    <section id="app-view" hidden>
+      <header class="chat-header">
+        <div class="chat-header-who">
+          <span class="signed-in-label">Signed in as</span>
+          <strong id="welcome-name"></strong>
+          <span id="welcome-email" class="muted"></span>
+        </div>
+        <button type="button" id="logout-btn">Log out</button>
+      </header>
+
+      <div class="conversation-bar" id="conversation-bar">
+        <!-- conversation chips injected here -->
+        <button type="button" id="new-conversation-btn" title="Start a new project review">+ New project</button>
+      </div>
+
+      <div class="message-list" id="message-list">
+        <div class="empty-state" id="empty-state">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <path d="M14 2v6h6" />
+          </svg>
+          <p>Upload a drawing or ask a question to get started.</p>
+        </div>
+      </div>
+
+      <form id="composer-form" class="composer">
+        <button type="button" id="upload-btn" class="icon-btn" title="Attach a drawing or document" aria-label="Attach a drawing or document">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a5.5 5.5 0 0 1-7.78-7.78l9.19-9.19a3.67 3.67 0 0 1 5.19 5.19l-9.2 9.19a1.83 1.83 0 0 1-2.6-2.6l8.49-8.48" />
+          </svg>
+        </button>
+        <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.dxf,.dwg" hidden />
+        <input type="text" id="composer-input" placeholder="Ask a question, or attach a drawing to review..." autocomplete="off" maxlength="20000" />
+        <button type="submit" class="icon-btn icon-btn-send" title="Send" aria-label="Send message">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M2 21l21-9L2 3v7l15 2-15 2z" />
+          </svg>
+        </button>
+      </form>
+      <p class="composer-hint">
+        Supports PDF, PNG/JPEG, and DXF/DWG drawing files up to 250 MB (DWG parsing is a
+        planned future capability). AI-assisted plan review is coming soon -- for now,
+        everything you send here is saved to this project thread.
+      </p>
+      <p class="error" id="chat-error"></p>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# Defense in depth: neither Dockerfile currently does a blanket `COPY . .`
+# (each lists exactly the files/dirs it needs -- see Dockerfile and
+# sandbox_worker/Dockerfile), so nothing here is strictly required today.
+# This exists so that if a future edit ever adds `COPY . .` under deadline
+# pressure, real secrets in .env don't silently end up baked into an image
+# layer -- especially now that images are headed to acrstore, where a layer
+# persists even after the file is later deleted from the repo.
+.env
+.git
+.gitignore
+__pycache__/
+*.pyc
+.venv/
+*.zip
+DEFERRED_ITEMS.md

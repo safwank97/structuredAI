@@ -1,0 +1,8 @@
+# Deliberately tiny relative to the control plane's requirements.txt -- no
+# fastapi/sqlalchemy/asyncpg/passlib/azure-identity/azure-keyvault-secrets.
+# This is the actual sandbox surface: it only needs to call Service Bus,
+# publish its result to Redis, and make plain HTTP calls to the control
+# plane's broker endpoints.
+azure-servicebus==7.14.3
+redis==5.2.1
+httpx==0.28.1

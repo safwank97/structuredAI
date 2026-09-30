@@ -1,0 +1,641 @@
+:root {
+  color-scheme: light dark;
+  --bg: #0b1220;
+  --card-bg: #131c30;
+  --text: #e8edf5;
+  --muted: #8a97ad;
+  --accent: #3fa9dc;
+  --accent-soft: rgba(63, 169, 220, 0.14);
+  --accent-text: #08131f;
+  /* Warm secondary accent, used sparingly (attachment cards) -- reads like
+     a redline/markup color against the blueprint-blue primary accent,
+     rather than piling every highlight onto one hue. */
+  --accent-2: #e2a63b;
+  --error: #f87171;
+  --success: #4ade80;
+  --border: #26324a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Belt-and-suspenders for the [hidden] attribute app.js uses to switch
+   between auth-view and app-view: an ID selector like #app-view always
+   wins specificity over the browser's own `[hidden] { display: none }`
+   rule, regardless of source order. Without this override, any element
+   toggled via .hidden that also has its own `display` rule (like
+   #app-view's `display: flex` below, needed for the chat layout) stays
+   visible even while `hidden` is set -- which is exactly what happened
+   before this rule existed: the chat panel rendered underneath the
+   still-showing login form instead of being hidden by it. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  padding: 16px;
+}
+
+.card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 28px;
+}
+
+h1 {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 1.05rem;
+  margin: 0 0 20px;
+}
+
+.h1-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+h1 span {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+h1 small {
+  font-weight: 400;
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.tab-btn.active {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.tab-panel {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tab-panel.active {
+  display: flex;
+}
+
+label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+input {
+  padding: 9px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+input:focus {
+  outline: 2px solid var(--accent);
+}
+
+.hint {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin: 2px 0 0;
+}
+
+/* ---- Live field validation: password confirmation, password-strength and
+   email-format feedback on the auth forms. A `.field-badge` is the small
+   circular !/?/check icon inside the input; `.field-message` is the text
+   line underneath that explains what it means -- the badge alone would only
+   be discoverable on hover, and the ask here was for guidance visible while
+   actually typing. ---- */
+.input-wrap {
+  position: relative;
+  display: flex;
+}
+
+.input-wrap input {
+  flex: 1;
+  padding-right: 32px;
+}
+
+.input-wrap input.input-invalid {
+  border-color: var(--error);
+}
+
+.input-wrap input.input-valid {
+  border-color: var(--success);
+}
+
+.field-badge {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: default;
+}
+
+.field-badge.field-badge-error {
+  background: var(--error);
+  color: #2a0d0d;
+}
+
+.field-badge.field-badge-valid {
+  background: var(--success);
+  color: #0a2414;
+}
+
+.field-message {
+  font-size: 0.75rem;
+  margin: 2px 0 0;
+  min-height: 1.1em;
+  color: var(--muted);
+}
+
+.field-message.field-message-error {
+  color: var(--error);
+}
+
+.field-message.field-message-valid {
+  color: var(--success);
+}
+
+button[type="submit"],
+#logout-btn {
+  margin-top: 14px;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.95rem;
+  width: 100%;
+}
+
+button[type="submit"]:hover,
+#logout-btn:hover {
+  opacity: 0.9;
+}
+
+.error {
+  color: var(--error);
+  font-size: 0.85rem;
+  min-height: 1.1em;
+  margin: 8px 0 0;
+}
+
+/* ---- Post-registration "check your email" panel -- shares .tab-panel's
+   display:flex/none toggling with the login/register forms (see app.js's
+   tab handling) but isn't reachable by clicking a tab button; app.js shows
+   it directly after a successful registration. ---- */
+.success-heading {
+  font-weight: 600;
+  font-size: 1rem;
+  margin: 4px 0 0;
+}
+
+.dev-verify-box {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+
+.dev-verify-label {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.dev-verify-link {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.dev-verify-link:hover {
+  text-decoration: underline;
+}
+
+#register-success-back {
+  margin-top: 16px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.9rem;
+  width: 100%;
+}
+
+#register-success-back:hover {
+  background: var(--bg);
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* ---- Chat mode: the card grows from the compact auth card into a full
+   chat panel once someone's signed in. body.chat-mode is toggled by
+   app.js alongside showAppView()/showAuthView(). ---- */
+body.chat-mode {
+  align-items: stretch;
+  padding: 0;
+}
+
+body.chat-mode .card {
+  max-width: 760px;
+  width: 100%;
+  height: 100vh;
+  margin: 0 auto;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 20px;
+}
+
+body.chat-mode h1 {
+  display: none;
+}
+
+#app-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 12px;
+}
+
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-header-who {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.signed-in-label {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.chat-header-who strong {
+  font-size: 0.95rem;
+}
+
+.chat-header-who .muted {
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#logout-btn {
+  margin-top: 0;
+  width: auto;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.conversation-bar {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.conversation-chip {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  max-width: 170px;
+}
+
+.conversation-chip svg {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.conversation-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-chip.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.conversation-chip-rename {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin-top: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+.conversation-chip-rename:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.conversation-chip-rename-input {
+  flex: 1;
+  min-width: 70px;
+  max-width: 130px;
+  padding: 0;
+  border: none;
+  border-bottom: 1px solid currentColor;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  font-family: inherit;
+}
+
+.conversation-chip-rename-input:focus {
+  outline: none;
+}
+
+#new-conversation-btn {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.message-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 12px;
+  border-radius: 10px;
+  background-color: rgba(255, 255, 255, 0.012);
+  /* Faint drafting-paper grid -- a nod to the blueprints this tool exists
+     to review, kept subtle enough not to compete with message legibility. */
+  background-image: linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+.empty-state {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
+}
+
+.empty-state svg {
+  opacity: 0.45;
+}
+
+.empty-state p {
+  margin: 0;
+  max-width: 220px;
+  font-size: 0.85rem;
+}
+
+.message {
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.message-user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: var(--accent-text);
+  border-bottom-right-radius: 4px;
+}
+
+.message-system {
+  align-self: center;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  font-size: 0.78rem;
+  max-width: 90%;
+}
+
+/* Rendered for a role="system" message shaped like "Uploaded: <name>
+   (<size>)" -- see app.js's UPLOAD_NOTE_PATTERN and the upload_file
+   handler in app/api/v1/conversations.py that produces that exact shape. */
+.attachment-card {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 85%;
+  padding: 10px 14px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-2);
+  border-radius: 10px;
+  white-space: normal;
+}
+
+.attachment-icon {
+  color: var(--accent-2);
+  flex-shrink: 0;
+}
+
+.attachment-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.attachment-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-size {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 6px;
+  flex-shrink: 0;
+  transition: border-color 0.15s ease;
+}
+
+.composer:focus-within {
+  border-color: var(--accent);
+}
+
+.composer #composer-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 6px 4px;
+}
+
+.composer #composer-input:focus {
+  outline: none;
+}
+
+.composer-hint {
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1.4;
+  margin: 2px 2px 0;
+}
+
+/* Scoped under .composer so these beat the generic `button[type="submit"]`
+   rule above on specificity (an .composer .icon-btn-send descendant
+   selector outranks a bare element+attribute selector regardless of
+   source order) -- without this scoping, the send button inherited that
+   rule's `width: 100%; padding: 10px; margin-top: 14px`, since it too is a
+   `type="submit"` button, and rendered as a full-width block instead of a
+   small round icon button. */
+.composer .icon-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  margin-top: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.composer .icon-btn:hover {
+  background: var(--bg);
+  color: var(--text);
+  opacity: 1;
+}
+
+.composer .icon-btn-send {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.composer .icon-btn-send:hover {
+  background: var(--accent);
+  opacity: 0.9;
+}
+
+.composer .icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
