@@ -124,6 +124,13 @@ services:
       # with an empty connection string that would only surface as a
       # confusing error the first time a run is created.
       SERVICE_BUS_SEND_CONNECTION_STRING: ${SERVICE_BUS_SEND_CONNECTION_STRING:?Set SERVICE_BUS_SEND_CONNECTION_STRING in your shell or .env -- see .env.example}
+      # Real LLM call via APIM -- optional, defaults keep local dev on the
+      # free, instant stub. See .env.example's "Real LLM call" block.
+      LOCAL_DEV_LLM_STUB: ${LOCAL_DEV_LLM_STUB:-true}
+      APIM_ANTHROPIC_GATEWAY_URL: ${APIM_ANTHROPIC_GATEWAY_URL:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-2048}
+      ANTHROPIC_TIMEOUT_SECONDS: ${ANTHROPIC_TIMEOUT_SECONDS:-60}
     ports:
       - "8000:8000"
     networks:
