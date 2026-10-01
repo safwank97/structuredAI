@@ -44,13 +44,18 @@ not just that it is.
    PASSWORD '...'` + a new `az keyvault secret set` (same name, new
    version).
 
-2. **No APIM subscription key/product created for the sandbox's calls to
-   APIM.** Real APIM instances commonly gate access with a subscription key
-   even when network reachability (the firewall allow-list) already permits
-   the call. Not yet needed because the sandbox doesn't call APIM directly
-   yet (see "LLM call routed through the control plane" below) -- walk
-   through creating a product + subscription in APIM and storing the key in
-   Key Vault when that direct-to-APIM wiring is actually built.
+2. **No APIM subscription key/product created for any caller of APIM.**
+   Real APIM instances commonly gate access with a subscription key even
+   when network reachability (the firewall allow-list) already permits the
+   call. **Update 2026-10-01:** an actual API now exists in APIM for this
+   (`anthropic-proxy`, see item 19) -- created with `--subscription-required
+   false`, a deliberate, visible choice matching this item's original "not
+   yet needed" framing, not an oversight. Still true: no product or
+   subscription key exists anywhere in `acb-msak-apim`. Still fine for now
+   because the only caller is this project's own control-plane process
+   (item 19); walk through creating a product + subscription (and storing
+   the key in Key Vault) before anything outside this project's own infra
+   is ever allowed to reach it.
 
 ## Architecture gaps vs. the target diagram
 
@@ -60,6 +65,19 @@ not just that it is.
    firewall allow-list), with APIM injecting the real Anthropic key from Key
    Vault. Chosen to restructure toward this (see item 5) rather than keep
    the control-plane-broker shape as a permanent stand-in.
+
+   **Update 2026-10-01 -- partially addressed, not resolved:** the "APIM
+   injecting the real Anthropic key from Key Vault" half is now real (see
+   item 19) -- `broker_call_llm` places an actual call through APIM's
+   `anthropic-proxy` API, which swaps a throwaway placeholder `x-api-key`
+   for the real one sourced from Key Vault. What's genuinely NOT changed:
+   the sandbox worker still only ever talks to this control plane's
+   `/internal/runs/{id}/llm` endpoint -- it still never calls APIM directly,
+   and still never could (it has no network path to APIM's gateway from
+   inside its own sandbox-net). The credential-broker pattern (O1) stayed
+   exactly as designed; only what sits behind it changed, from a stub to a
+   real model call. Restructuring so the sandbox calls APIM directly is
+   still a separate, larger, still-deferred piece of work.
 
 4. **File access is an HTTP broker endpoint (`GET
    /internal/runs/{id}/file`), not a platform-mounted volume.** This is
@@ -189,6 +207,66 @@ not just that it is.
     az redis firewall-rules delete -g acb-msak-rg --name acb-msak-redis \
       --rule-name AllowMyCurrentDevIp
     ```
+
+19. **The real Anthropic key is now live, and `broker_call_llm` places a
+    real, billed call -- added 2026-10-01.** What exists now, end to end:
+    the real key lives in Key Vault as `acb-msak-anthropic-api-key`; a
+    Key-Vault-backed named value of the same name exists in
+    `acb-msak-apim` (confirmed via its `lastStatus.code: "Success"`); a new
+    APIM API (`anthropic-proxy`, path `/anthropic`, backend
+    `https://api.anthropic.com`, `subscription-required: false` -- see item
+    2) has one operation (`POST /v1/messages`) and an inbound policy that
+    overrides whatever `x-api-key` the caller sends with
+    `{{acb-msak-anthropic-api-key}}`, forces `anthropic-version:
+    2023-06-01` and `content-type: application/json`, and strips any stray
+    `Authorization` header. Verified by hand with a real curl against
+    `https://acb-msak-apim.azure-api.net/anthropic/v1/messages` sending an
+    obviously-wrong `x-api-key` and getting back a real completion anyway
+    -- proof the swap happens inside APIM, not before it.
+
+    `app/api/v1/runs.py`'s `broker_call_llm` now calls that URL for real
+    when `local_dev_llm_stub` is `False` (still `True` by default, and
+    docker-compose.yml never overrides it, so a normal local run stays
+    free/instant/stub -- this only activates when someone deliberately
+    flips it, e.g. the real Azure deployment or a laptop testing against
+    real Azure per `.env.example`'s new, commented-out block). New
+    `Settings` fields: `apim_anthropic_gateway_url`, `anthropic_api_version`
+    (kept in sync with APIM's policy, which hardcodes the same value as a
+    second line of defense), `anthropic_model` (default
+    `claude-sonnet-5-5` -- a deliberate quality/cost/latency choice for a
+    plan-review task, not the only valid one; Opus/Haiku/Fable all verified
+    reachable through the same proxy), `anthropic_max_tokens` (2048, sized
+    for an actual multi-paragraph review, not the old stub's instant
+    return), and `anthropic_timeout_seconds` (60s).
+
+    `cost_usd` is computed from real `usage.input_tokens`/`output_tokens`
+    against `ANTHROPIC_PRICING_USD_PER_MTOK` in `app/api/v1/runs.py`
+    (Anthropic's own published per-model pricing, checked 2026-10-01) --
+    only `claude-sonnet-5-5` is in that table today; switching
+    `anthropic_model` to Opus/Haiku/Fable without adding its rate there
+    will silently compute `cost_usd=0.0` for a real, billed call (the
+    review itself still works -- only cost tracking for that model would be
+    wrong). Add the new model's rate to that table before relying on
+    `run_usage` numbers for anything other than Sonnet 5.5.
+
+    One real timeout-budget consequence of this change, already fixed
+    alongside it: `sandbox_worker/worker.py`'s `CONTROL_PLANE_TIMEOUT_SECONDS`
+    was `30` (sized for the old instant stub) and has been bumped to `120`,
+    since a real model call can now take genuinely longer than 30s and the
+    sandbox's own HTTP budget for calling this control plane has to stay
+    comfortably larger than `anthropic_timeout_seconds` (60s) or runs would
+    spuriously fail on slow-but-successful model calls. Keep that ordering
+    (`CONTROL_PLANE_TIMEOUT_SECONDS` > `anthropic_timeout_seconds`) if
+    either is changed again.
+
+    Still NOT done, left exactly as item 3 describes: the sandbox worker
+    still never calls APIM directly -- this is entirely inside the existing
+    control-plane broker endpoint. Also still open: item 2 (no product/
+    subscription on `anthropic-proxy`), and the real Anthropic key having
+    briefly appeared in plaintext in a terminal/chat transcript while being
+    stored -- rotate it in the Anthropic console and re-run `az keyvault
+    secret set` with the same name before relying on this for anything
+    beyond local verification.
 
 ## Format
 

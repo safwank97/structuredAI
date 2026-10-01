@@ -57,7 +57,16 @@ from sandbox_worker.result_publisher import publish_result
 CONTROL_PLANE_URL = os.environ.get("CONTROL_PLANE_URL", "http://api:8000")
 REQUESTS_QUEUE = os.environ.get("SERVICE_BUS_QUEUE", "acb-msak-sbq-agent-runs")
 POLL_WAIT_SECONDS = int(os.environ.get("SERVICE_BUS_RECEIVE_WAIT_SECONDS", "20"))
-HTTP_TIMEOUT_SECONDS = float(os.environ.get("CONTROL_PLANE_TIMEOUT_SECONDS", "30"))
+# 120s, not the original 30s: that value was sized for the control plane's
+# OLD local-dev LLM stub (a canned string, returned instantly). Now that
+# broker_call_llm can place a real call through APIM to Anthropic --
+# genuinely multi-second, sometimes tens of seconds under load -- this
+# budget has to comfortably exceed app/config.py's anthropic_timeout_seconds
+# (60s) or every /internal/runs/{id}/llm call risks this process timing out
+# and reporting the run as crashed/failed even when the real call would
+# have succeeded moments later. Keep this larger than that setting if
+# either is ever changed.
+HTTP_TIMEOUT_SECONDS = float(os.environ.get("CONTROL_PLANE_TIMEOUT_SECONDS", "120"))
 
 
 def _extract_text_excerpt(filename: str, data: bytes) -> str:

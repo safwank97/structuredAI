@@ -33,6 +33,7 @@ import base64
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -364,6 +365,19 @@ async def broker_get_file(
     )
 
 
+# USD per million tokens, Anthropic's own published API pricing
+# (platform.claude.com/docs/en/about-claude/pricing, checked 2026-10-01).
+# Keyed by model id so cost_usd stays correct if Settings.anthropic_model is
+# ever changed away from the default -- deliberately NOT a single hardcoded
+# pair of numbers, since different models have different prices and
+# silently applying Sonnet's rate to an Opus or Haiku call would produce a
+# confidently wrong run_usage row. A model id missing from this table is a
+# real gap (see broker_call_llm below), not something to guess a price for.
+ANTHROPIC_PRICING_USD_PER_MTOK: dict[str, dict[str, float]] = {
+    "claude-sonnet-5-5": {"input": 2.0, "output": 10.0},
+}
+
+
 @router.post("/internal/runs/{run_id}/llm", response_model=BrokerLlmResponse)
 async def broker_call_llm(
     run_id: uuid.UUID,
@@ -371,48 +385,127 @@ async def broker_call_llm(
     claims_and_session: tuple[RunTokenClaims, AsyncSession] = Depends(get_run_claims),
 ) -> BrokerLlmResponse:
     """The sandbox worker's only path to a model call -- it never holds a
-    model-provider API key itself. Today (local_dev_llm_stub=True) this
-    returns a deterministic canned review instead of calling a real model,
-    so smoke tests are fast, free, and reproducible. The real swap-in point
-    is APIM as the credential broker in front of the actual model
-    deployment (already named in app/db/models/run.py's RunUsage docstring
-    as the intended source of run_usage rows, via an Event Hub consumer
-    reading APIM's access logs) -- wiring that in is deferred to the
-    Cloud-integration step, documented here rather than silently assumed.
+    model-provider API key itself. When local_dev_llm_stub=True (the
+    docker-compose default) this returns a deterministic canned review
+    instead of calling a real model, so smoke tests stay fast, free, and
+    reproducible. When False, this process itself places the real call --
+    not the sandbox worker, which still only ever talks to THIS endpoint
+    (see DEFERRED_ITEMS.md item 3: the sandbox-calls-APIM-directly target
+    architecture is a separate, still-deferred restructuring; this is the
+    credential-broker half of O1 staying intact, now pointed at a real
+    model instead of a stub). The real request goes to
+    settings.apim_anthropic_gateway_url -- APIM, never api.anthropic.com
+    directly -- so the only "key" this code ever sends is a throwaway
+    literal string; APIM's "anthropic-proxy" API policy overrides it with
+    the real key sourced from Key Vault before forwarding upstream. This
+    process never holds, logs, or has the ability to leak the real
+    Anthropic key at any point.
     """
     claims, _session = claims_and_session
     if claims.run_id != run_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Run token does not match this run")
 
     settings = get_settings()
-    if not settings.local_dev_llm_stub:
-        # There is no real model client wired up yet -- fail loudly rather
-        # than silently falling through to the stub if this flag is ever
-        # flipped off before the real integration exists.
-        raise HTTPException(
-            status.HTTP_501_NOT_IMPLEMENTED,
-            "local_dev_llm_stub is disabled but no real LLM provider is wired up yet",
+    filename = payload.original_filename or "the uploaded drawing"
+
+    if settings.local_dev_llm_stub:
+        question_part = f' The reviewer also asked: "{payload.question}"' if payload.question else ""
+        excerpt_note = (
+            f" (extracted content: {len(payload.file_excerpt)} characters analyzed)"
+            if payload.file_excerpt
+            else " (no extractable text content -- format not yet parsed beyond signature validation)"
+        )
+        review_text = (
+            f"[LOCAL DEV STUB -- not a real model response] Reviewed {filename}{excerpt_note}. "
+            "This stand-in does not perform an actual plan review; it exists so the "
+            "run pipeline (upload -> parse -> LLM call -> chat result) can be smoke-"
+            f"tested end to end without a real model provider wired up yet.{question_part}"
+        )
+        # Fabricated-but-plausible figures, scaled loosely off input size, so
+        # run_usage rows and any cost-reporting UI built against them have
+        # something non-zero and non-constant to render during local testing.
+        input_tokens = max(50, len(payload.file_excerpt) // 4 + len(payload.question) // 4)
+        output_tokens = max(30, len(review_text) // 4)
+        cost_usd = round((input_tokens * 0.000003) + (output_tokens * 0.000015), 4)
+        return BrokerLlmResponse(
+            review_text=review_text,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
         )
 
-    filename = payload.original_filename or "the uploaded drawing"
-    question_part = f' The reviewer also asked: "{payload.question}"' if payload.question else ""
-    excerpt_note = (
-        f" (extracted content: {len(payload.file_excerpt)} characters analyzed)"
-        if payload.file_excerpt
-        else " (no extractable text content -- format not yet parsed beyond signature validation)"
+    # --- real call, through APIM ---
+    if payload.file_excerpt:
+        content_note = f"Extracted content/metadata from the file:\n{payload.file_excerpt}"
+    else:
+        content_note = "No extractable text content was available for this file (format not yet parsed beyond signature validation)."
+    question_note = payload.question or "Provide a general review of this drawing."
+    user_content = (
+        f"You are reviewing an uploaded architectural/structural drawing file named '{filename}'.\n\n"
+        f"{content_note}\n\n"
+        f"Reviewer's request: {question_note}"
     )
-    review_text = (
-        f"[LOCAL DEV STUB -- not a real model response] Reviewed {filename}{excerpt_note}. "
-        "This stand-in does not perform an actual plan review; it exists so the "
-        "run pipeline (upload -> parse -> LLM call -> chat result) can be smoke-"
-        f"tested end to end without a real model provider wired up yet.{question_part}"
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.anthropic_timeout_seconds) as client:
+            response = await client.post(
+                settings.apim_anthropic_gateway_url,
+                headers={
+                    "content-type": "application/json",
+                    # Deliberately not a real credential -- APIM's inbound
+                    # policy on the anthropic-proxy API overrides this
+                    # header with the real key before forwarding upstream.
+                    # See DEFERRED_ITEMS.md item 19 for the exact policy.
+                    "x-api-key": "placeholder-overridden-by-apim-policy",
+                },
+                json={
+                    "model": settings.anthropic_model,
+                    "max_tokens": settings.anthropic_max_tokens,
+                    "messages": [{"role": "user", "content": user_content}],
+                },
+            )
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status.HTTP_504_GATEWAY_TIMEOUT,
+            f"Timed out waiting for the model call via APIM: {exc}",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Could not reach the model via APIM: {exc}",
+        ) from exc
+
+    if response.status_code != 200:
+        # Surfacing the upstream status/body here is a deliberate dev/
+        # interview-project tradeoff (fast diagnosis of a bad model id, a
+        # policy misconfiguration, a quota error) -- a production-hardened
+        # version would log the detail server-side and return a generic
+        # message to callers instead of echoing Anthropic's raw response.
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Model call via APIM failed ({response.status_code}): {response.text[:500]}",
+        )
+
+    data = response.json()
+    review_text = "".join(
+        block.get("text", "") for block in data.get("content", []) if block.get("type") == "text"
     )
-    # Fabricated-but-plausible figures, scaled loosely off input size, so
-    # run_usage rows and any cost-reporting UI built against them have
-    # something non-zero and non-constant to render during local testing.
-    input_tokens = max(50, len(payload.file_excerpt) // 4 + len(payload.question) // 4)
-    output_tokens = max(30, len(review_text) // 4)
-    cost_usd = round((input_tokens * 0.000003) + (output_tokens * 0.000015), 4)
+    usage = data.get("usage", {})
+    input_tokens = usage.get("input_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0)
+
+    pricing = ANTHROPIC_PRICING_USD_PER_MTOK.get(settings.anthropic_model)
+    if pricing is None:
+        # Honest zero, not a guessed number -- see this dict's docstring
+        # above. A run still succeeds and review_text is still real; only
+        # cost tracking for this unrecognized model is what's missing.
+        cost_usd = 0.0
+    else:
+        cost_usd = round(
+            (input_tokens * pricing["input"] / 1_000_000)
+            + (output_tokens * pricing["output"] / 1_000_000),
+            6,
+        )
 
     return BrokerLlmResponse(
         review_text=review_text,

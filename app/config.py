@@ -136,13 +136,55 @@ class Settings(BaseSettings):
     # rack up real cost on every smoke-test run), app/api/v1/runs.py's
     # internal LLM-broker endpoint returns a deterministic canned review
     # plus fabricated-but-plausible token/cost figures when this is True.
-    # The real swap-in point, per the existing architecture already encoded
-    # in app/db/models/run.py's docstrings, is APIM as the credential
-    # broker in front of the actual model deployment, with its access logs
-    # shipped to Event Hub and consumed into run_usage -- both explicitly
-    # deferred to the Cloud-wiring step (step 15+), same DWG-style
-    # documented-not-built pattern as everywhere else in this project.
+    # Flip to False once APIM_ANTHROPIC_GATEWAY_URL is reachable (real Azure
+    # only -- see docker-compose.yml, which never sets this to False) to
+    # make broker_call_llm place a real, billed call instead. See
+    # DEFERRED_ITEMS.md item 19 for exactly what changed when this was
+    # wired in and what's still a stand-in.
     local_dev_llm_stub: bool = True
+
+    # --- Real LLM call, routed through APIM (credential-broker pattern) ---
+    # Full Messages-API-shaped URL behind APIM's gateway, NOT Anthropic's
+    # own api.anthropic.com directly -- the whole point is that this
+    # process (and the sandbox worker, transitively, via this broker
+    # endpoint) never holds or sends the real Anthropic key. APIM's
+    # "anthropic-proxy" API + its inbound policy swap whatever x-api-key
+    # value this code sends for the real one, sourced from Key Vault via a
+    # Key-Vault-backed named value (acb-msak-anthropic-api-key) -- see the
+    # az rest/az apim walkthrough delivered alongside this change for the
+    # exact PUT calls that created the named value, the API, the operation,
+    # and the policy itself.
+    apim_anthropic_gateway_url: str = "https://acb-msak-apim.azure-api.net/anthropic/v1/messages"
+    # Anthropic's required API version header -- see
+    # https://platform.claude.com/docs/en/api/messages. Not expected to
+    # change often; APIM's policy also hardcodes this same value as a
+    # second line of defense, so the two should be kept in sync if either
+    # is ever bumped.
+    anthropic_api_version: str = "2023-06-01"
+    # Real API model id (lowercase, hyphenated -- NOT a display name like
+    # "Claude Sonnet 5.5"; see https://platform.claude.com/docs/en/about-
+    # claude/models/overview). Sonnet chosen as the default balance of
+    # quality/cost/latency for a plan-review task; swap freely via the
+    # ANTHROPIC_MODEL env var -- Opus for higher quality at higher cost,
+    # Haiku for cheaper/faster, Fable for creative-leaning output. If you
+    # change this, also update ANTHROPIC_PRICING_USD_PER_MTOK below, or
+    # run_usage.cost_usd will silently come back as 0.0 for the new model
+    # (see broker_call_llm's cost calculation -- deliberately not a guess).
+    anthropic_model: str = "claude-sonnet-5-5"
+    # Generous for a multi-paragraph drawing review response, not a
+    # generic default -- a short canned reply (the old local-dev stub)
+    # never needed this; a real model actually reasoning about an
+    # extracted excerpt can run long.
+    anthropic_max_tokens: int = 2048
+    # Real model latency is seconds, sometimes tens of seconds under load
+    # -- NOT the sub-millisecond return of the old canned-string stub.
+    # IMPORTANT: sandbox_worker/worker.py's own CONTROL_PLANE_TIMEOUT_SECONDS
+    # (the sandbox's budget for ITS call into this process's /llm broker
+    # route) must stay comfortably larger than this value, or the sandbox
+    # worker will time out and report the run as crashed/failed even when
+    # this call would have succeeded a few seconds later. Bumped alongside
+    # this change -- see sandbox_worker/worker.py.
+    anthropic_timeout_seconds: float = 60.0
 
     # --- secret-backed fields, populated by load_secrets() below ---
     # NOTE on this one: "acb-msak-pg-app-password" does NOT exist in Key
